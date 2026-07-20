@@ -1,0 +1,11 @@
+services:
+  aprsmon-weather:
+    build: .
+    container_name: aprsmon-weather
+    restart: unless-stopped
+    ports:
+      - "8079:8079"
+    environment:
+      # Set as a Portainer stack environment variable -- never commit an
+      # actual key here. Same pattern as PropMon's TEMPEST_TOKEN.
+      - APRSFI_API_KEY=${APRSFI_API_KEY}
