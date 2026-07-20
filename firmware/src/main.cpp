@@ -146,36 +146,46 @@ static void render_weather_screen() {
     snprintf(pressure_str, sizeof(pressure_str), "%.1f", p.pressure_mbar);
     snprintf(rain_str, sizeof(rain_str), "%.2f in", p.rain_1h_in);
 
-    draw_centered_text("WIND", 135, 218, 2, COLOR_LABEL);
-    draw_centered_text(wind_str, 135, 244, 3, RGB565_WHITE, true);
+    draw_centered_text("WIND", 100, 218, 2, COLOR_LABEL);
+    draw_centered_text(wind_str, 100, 244, 3, RGB565_WHITE, true);
 
-    draw_centered_text("GUST", 255, 218, 2, COLOR_LABEL);
-    draw_centered_text(gust_str, 255, 244, 3, RGB565_WHITE, true);
+    draw_centered_text("GUST", 290, 218, 2, COLOR_LABEL);
+    draw_centered_text(gust_str, 290, 244, 3, RGB565_WHITE, true);
 
-    draw_centered_text("PRESSURE", 135, 282, 2, COLOR_LABEL);
-    draw_centered_text(pressure_str, 135, 308, 3, RGB565_WHITE, true);
+    draw_centered_text("PRESSURE", 115, 282, 2, COLOR_LABEL);
+    draw_centered_text(pressure_str, 115, 308, 3, RGB565_WHITE, true);
 
-    draw_centered_text("RAIN 1H", 255, 282, 2, COLOR_LABEL);
-    draw_centered_text(rain_str, 255, 308, 3, RGB565_WHITE, true);
+    draw_centered_text("RAIN 1H", 275, 282, 2, COLOR_LABEL);
+    draw_centered_text(rain_str, 275, 308, 3, RGB565_WHITE, true);
 
-    gfx->drawLine(40, 330, 350, 330, COLOR_LABEL);
+    gfx->drawLine(60, 330, 330, 330, COLOR_LABEL);
 
     // Secondary station -- compact comparison line, matching the series'
-    // established "secondary = compact, not full parity" visual grammar
+    // established "secondary = compact, not full parity" visual grammar.
+    // Deliberately SHORT: this display is round, and the usable width at
+    // this y-position (far from vertical center) is only ~230px, not the
+    // full 390px -- confirmed by real-hardware testing 2026-07-20, where
+    // the original longer version (including distance/bearing) got
+    // clipped off both ends. Distance/bearing are already established by
+    // the primary station; this line only needs to answer "how does the
+    // second-closest station compare."
     if (current_data.secondary.valid) {
         const WeatherStation &s = current_data.secondary;
-        char secondary_line[56];
-        snprintf(secondary_line, sizeof(secondary_line), "%s (%.1f mi %s) %.0fF - %.0f%% RH",
-                  s.callsign, s.distance_mi, s.bearing, s.temp_f, s.humidity_pct);
-        draw_centered_text(secondary_line, 195, 352, 2, COLOR_LABEL);
+        char secondary_line[32];
+        snprintf(secondary_line, sizeof(secondary_line), "%s %.0fF - %.0f%% RH",
+                  s.callsign, s.temp_f, s.humidity_pct);
+        draw_centered_text(secondary_line, 195, 340, 2, COLOR_LABEL);
     }
 
-    // Footer
-    char age_str[24];
-    format_age(current_data.fetched_at_millis, age_str, sizeof(age_str));
-    char footer_str[40];
-    snprintf(footer_str, sizeof(footer_str), "Updated %s", age_str);
-    draw_centered_text(footer_str, 195, 376, 2, staleness_color(current_data.fetched_at_millis));
+    // Footer -- also affected by the round display's narrowing width at
+    // this y-position. Real hardware testing 2026-07-20 showed even the
+    // shortened "Updated Xs ago" form still clipping at both ends here --
+    // dropped the "Updated " prefix entirely; the age text alone is well
+    // within the available width, and the color (fresh vs. stale) already
+    // carries the meaning "Updated" was adding.
+    char footer_str[24];
+    format_age(current_data.fetched_at_millis, footer_str, sizeof(footer_str));
+    draw_centered_text(footer_str, 195, 366, 2, staleness_color(current_data.fetched_at_millis));
 }
 
 // ---------------------------------------------------------------------
