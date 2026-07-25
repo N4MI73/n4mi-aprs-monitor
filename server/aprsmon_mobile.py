@@ -52,7 +52,9 @@ PASSCODE = "-1"  # receive-only, confirmed from aprs-is.net's own Connecting.asp
 
 HOME_LAT = 33.4493757
 HOME_LON = -82.1824427
-FILTER_RADIUS_KM = 32  # 20 miles, converted (aprs-is.net filters use km)
+FILTER_RADIUS_KM = 500  # TEMPORARY -- widened 2026-07-25 to stress-test the
+# connection/filter pipeline independent of whether 20mi (32km) happens to
+# be genuinely quiet right now. REVERT TO 32 once confirmed working.
 
 APRS_IS_HOST = "rotate.aprs2.net"
 APRS_IS_PORT = 14580  # filtered port, NOT the 10152 full-feed firehose
