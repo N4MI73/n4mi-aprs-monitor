@@ -1,0 +1,9 @@
+services:
+  aprsmon-mobile:
+    build:
+      context: .
+      dockerfile: Dockerfile.mobile
+    container_name: aprsmon-mobile
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
