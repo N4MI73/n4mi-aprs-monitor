@@ -124,6 +124,15 @@ last_position_seen = {}  # callsign -> (lat, lon, datetime)
 # the JSON endpoint actually reads from.
 mobile_state = {}  # callsign -> {distance_mi, bearing, last_heard}
 
+# Connection diagnostics -- added because Portainer's log viewer isn't
+# available in this deployment (Community Edition limitation), so the
+# service needs to be self-diagnosable purely through its HTTP API.
+connection_status = "starting"  # starting | connecting | connected | error
+last_connect_error = None
+connected_since = None
+total_packets_seen = 0  # every position packet, moving or not -- answers
+                          # "is anything coming through at all"
+
 
 def is_moving(callsign, lat, lon, speed_knots):
     if speed_knots is not None and speed_knots > MIN_SPEED_KNOTS:
@@ -145,6 +154,7 @@ def is_moving(callsign, lat, lon, speed_knots):
 # ---------------------------------------------------------------------------
 
 def on_packet(packet):
+    global total_packets_seen
     try:
         if "latitude" not in packet or "longitude" not in packet:
             return  # not a position report -- status/telemetry/etc, ignore
@@ -152,6 +162,8 @@ def on_packet(packet):
         callsign = packet.get("from")
         if not callsign:
             return
+
+        total_packets_seen += 1
 
         lat = packet["latitude"]
         lon = packet["longitude"]
@@ -182,16 +194,24 @@ def on_packet(packet):
 # ---------------------------------------------------------------------------
 
 def aprs_is_loop():
+    global connection_status, last_connect_error, connected_since
     filter_str = f"r/{HOME_LAT}/{HOME_LON}/{FILTER_RADIUS_KM}"
     while True:
         try:
+            connection_status = "connecting"
             log.info("Connecting to APRS-IS as %s (receive-only)", CALLSIGN)
             ais = aprslib.IS(CALLSIGN, passcode=PASSCODE, host=APRS_IS_HOST, port=APRS_IS_PORT)
             ais.set_filter(filter_str)  # UNVERIFIED API -- see module docstring
             ais.connect()
+            connection_status = "connected"
+            connected_since = datetime.now(timezone.utc)
+            last_connect_error = None
             log.info("Connected. Filter: %s", filter_str)
             ais.consumer(on_packet, raw=False, immortal=True)
         except Exception as exc:
+            connection_status = "error"
+            last_connect_error = str(exc)
+            connected_since = None
             log.warning("APRS-IS connection error, reconnecting in %ss: %s",
                         RECONNECT_DELAY_SECONDS, exc)
             time.sleep(RECONNECT_DELAY_SECONDS)
@@ -270,6 +290,25 @@ def healthz():
 @app.route("/api/instrument/mobile")
 def mobile():
     return jsonify(compute_snapshot())
+
+
+@app.route("/debug")
+def debug():
+    """Connection diagnostics -- exists specifically because Portainer's log
+    viewer isn't available in this deployment. Answers: is the APRS-IS
+    connection actually up, and is anything coming through at all."""
+    with state_lock:
+        tracked_positions = len(last_position_seen)
+        tracked_mobile = len(mobile_state)
+    return jsonify({
+        "connection_status": connection_status,
+        "last_connect_error": last_connect_error,
+        "connected_since": connected_since.isoformat() if connected_since else None,
+        "total_packets_seen": total_packets_seen,
+        "tracked_positions": tracked_positions,
+        "tracked_mobile_stations": tracked_mobile,
+        "filter": f"r/{HOME_LAT}/{HOME_LON}/{FILTER_RADIUS_KM}",
+    })
 
 
 if __name__ == "__main__":
