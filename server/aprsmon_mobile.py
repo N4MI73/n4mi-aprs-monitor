@@ -25,6 +25,12 @@ in one should have any chance of affecting the other.
    source in this session. If filtering doesn't visibly work once deployed
    (i.e. packets from far outside 20mi are coming through), this is the
    first thing to check.
+
+RESOLVED (2026-07-25): the constructor keyword was originally guessed as
+`passcode=`, which is wrong -- confirmed via a real runtime error
+(`IS.__init__() got an unexpected keyword argument 'passcode'`) and fixed
+by checking aprslib's actual source (aprslib/inet.py): the real parameter
+name is `passwd=`.
 """
 
 import os
@@ -200,7 +206,7 @@ def aprs_is_loop():
         try:
             connection_status = "connecting"
             log.info("Connecting to APRS-IS as %s (receive-only)", CALLSIGN)
-            ais = aprslib.IS(CALLSIGN, passcode=PASSCODE, host=APRS_IS_HOST, port=APRS_IS_PORT)
+            ais = aprslib.IS(CALLSIGN, passwd=PASSCODE, host=APRS_IS_HOST, port=APRS_IS_PORT)
             ais.set_filter(filter_str)  # UNVERIFIED API -- see module docstring
             ais.connect()
             connection_status = "connected"
