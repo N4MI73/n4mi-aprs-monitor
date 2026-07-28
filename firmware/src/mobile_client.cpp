@@ -58,6 +58,23 @@ bool mobile_client_fetch(MobileData &out) {
     strlcpy(temp.updated, doc["updated"] | "", sizeof(temp.updated));
     temp.fetched_at_millis = millis();
 
+    // Parse the recent[] array -- same shape as last_active, just
+    // repeated. Missing/absent array is treated as zero entries, not
+    // a parse failure (matches last_active's own null-is-legitimate
+    // handling).
+    temp.recent_count = 0;
+    JsonArray recentArr = doc["recent"].as<JsonArray>();
+    for (JsonObject obj : recentArr) {
+        if (temp.recent_count >= MobileData::RECENT_MAX) break;
+        LastActiveStation &r = temp.recent[temp.recent_count];
+        strlcpy(r.callsign, obj["callsign"] | "", sizeof(r.callsign));
+        r.minutes_ago = obj["minutes_ago"] | 0;
+        r.distance_mi = obj["distance_mi"] | 0.0f;
+        strlcpy(r.bearing, obj["bearing"] | "", sizeof(r.bearing));
+        r.valid = true;
+        temp.recent_count++;
+    }
+
     out = temp;
 
 #if DEBUG_VERBOSE

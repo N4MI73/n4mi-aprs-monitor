@@ -76,6 +76,7 @@ static uint16_t COLOR_LABEL;
 static uint16_t COLOR_MUTED;
 static uint16_t COLOR_STALE;
 static uint16_t COLOR_FOOTER;
+static uint16_t COLOR_RAIN;
 
 static void init_colors() {
     COLOR_TEAL   = gfx->color565(0x5D, 0xCA, 0xA5);
@@ -87,6 +88,7 @@ static void init_colors() {
                                                        // constant once
                                                        // ui_common is ported
     COLOR_FOOTER = gfx->color565(0x5F, 0x5E, 0x5A);
+    COLOR_RAIN   = gfx->color565(0x37, 0x8A, 0xDD);
 }
 
 // ---------------------------------------------------------------------
@@ -102,6 +104,20 @@ static unsigned long last_weather_fetch_millis = 0;
 static MobileData current_mobile;
 static bool have_mobile_data = false;
 static unsigned long last_mobile_fetch_millis = 0;
+
+// Weather screen's short-press behavior: swap which station (primary/
+// secondary) gets the large-value treatment. Purely a display-state
+// toggle -- no new fetch needed, both stations' data are already in
+// memory. Reset on any real navigation (not on ticks or the toggle
+// itself) so re-arriving at Weather always starts predictable, rather
+// than surprising with whatever was left over from a previous visit.
+static bool weather_swapped = false;
+
+// Mobile Activity's short-press behavior: toggle to the Recent
+// Stations sub-view. Same reset-on-navigation discipline as
+// weather_swapped -- always starts on the main view when arriving
+// fresh, regardless of what was showing on a previous visit.
+static bool mobile_show_recent = false;
 
 #define FIRST_FETCH_RETRY_MS 5000
 
@@ -180,7 +196,10 @@ static void render_weather_screen() {
         return;
     }
 
-    const WeatherStation &p = current_weather.primary;
+    const WeatherStation &p = (weather_swapped && current_weather.secondary.valid)
+                                ? current_weather.secondary : current_weather.primary;
+    const WeatherStation &s = (weather_swapped && current_weather.secondary.valid)
+                                ? current_weather.primary : current_weather.secondary;
 
     draw_centered_text("WEATHER", 195, 30, 2, COLOR_TEAL, true);
 
@@ -219,8 +238,7 @@ static void render_weather_screen() {
 
     gfx->drawLine(60, 330, 330, 330, COLOR_LABEL);
 
-    if (current_weather.secondary.valid) {
-        const WeatherStation &s = current_weather.secondary;
+    if (s.valid) {
         char secondary_line[32];
         snprintf(secondary_line, sizeof(secondary_line), "%s %.0fF - %.0f%% RH",
                   s.callsign, s.temp_f, s.humidity_pct);
@@ -240,29 +258,151 @@ static void render_weather_screen() {
 
 static void render_overview_screen() {
     display_clear();
-    draw_centered_text("OVERVIEW", 195, 100, 2, COLOR_TEAL, true);
-    draw_centered_text("Not yet built", 195, 140, 2, COLOR_LABEL);
+
+    draw_centered_text("OVERVIEW", 195, 30, 2, COLOR_TEAL, true);
+
+    // -- Weather section --
+    draw_centered_text("WEATHER", 195, 58, 2, COLOR_LABEL);
+
     if (have_weather_data) {
-        char line[32];
-        snprintf(line, sizeof(line), "Weather: %.0fF", current_weather.primary.temp_f);
-        draw_centered_text(line, 195, 190, 2, COLOR_MUTED);
+        const WeatherStation &p = current_weather.primary;
+
+        char temp_str[16];
+        snprintf(temp_str, sizeof(temp_str), "%.0fF", p.temp_f);
+        draw_centered_text(temp_str, 195, 104, 5, RGB565_WHITE, true);
+
+        char humidity_str[24];
+        snprintf(humidity_str, sizeof(humidity_str), "Humidity %.0f%%", p.humidity_pct);
+        draw_centered_text(humidity_str, 195, 130, 2, COLOR_MUTED);
+
+        // Rain callout only appears when actually raining -- dry
+        // conditions show nothing extra, matching the approved mockup.
+        if (p.rain_1h_in > 0.0f) {
+            char rain_str[24];
+            snprintf(rain_str, sizeof(rain_str), "Rain %.2f in/hr", p.rain_1h_in);
+            draw_centered_text(rain_str, 195, 152, 2, COLOR_RAIN);
+        }
+    } else {
+        draw_centered_text("Waiting for data...", 195, 110, 2, COLOR_LABEL);
     }
-    if (have_mobile_data && current_mobile.last_active.valid) {
-        char line[40];
-        snprintf(line, sizeof(line), "Last: %s (%dm ago)",
-                  current_mobile.last_active.callsign, current_mobile.last_active.minutes_ago);
-        draw_centered_text(line, 195, 220, 2, COLOR_MUTED);
+
+    gfx->drawLine(60, 172, 330, 172, COLOR_LABEL);
+
+    // -- Mobile section --
+    draw_centered_text("MOBILE", 195, 198, 2, COLOR_LABEL);
+
+    if (have_mobile_data) {
+        if (current_mobile.last_active.valid) {
+            const LastActiveStation &s = current_mobile.last_active;
+            draw_centered_text(s.callsign, 195, 228, 3, RGB565_WHITE, true);
+
+            char sub_line[40];
+            snprintf(sub_line, sizeof(sub_line), "%.1f mi %s - %dm ago",
+                      s.distance_mi, s.bearing, s.minutes_ago);
+            draw_centered_text(sub_line, 195, 254, 2, COLOR_MUTED);
+        } else {
+            // Quiet state -- legitimate and calm, not an error, same
+            // "quiet is okay" principle as PropMon's ALL CLEAR state.
+            draw_centered_text("No activity in the last hour", 195, 232, 2, COLOR_MUTED);
+        }
+    } else {
+        draw_centered_text("Waiting for data...", 195, 232, 2, COLOR_LABEL);
     }
+
+    gfx->drawLine(60, 274, 330, 274, COLOR_LABEL);
+
+    draw_centered_text("Rotate to cycle", 195, 300, 2, COLOR_FOOTER);
+}
+
+static void render_mobile_main_screen() {
+    display_clear();
+
+    draw_centered_text("MOBILE", 195, 30, 2, COLOR_TEAL, true);
+    draw_centered_text("within 20 mi", 195, 56, 2, COLOR_LABEL);
+
+    if (!have_mobile_data) {
+        display_show_boot_message("Mobile", "Waiting for data...");
+        return;
+    }
+
+    char count_str[8];
+    snprintf(count_str, sizeof(count_str), "%d", current_mobile.mobile_count_1h);
+    draw_centered_text(count_str, 195, 122, 7, RGB565_WHITE, true);
+    draw_centered_text("active last hour", 195, 146, 2, COLOR_MUTED);
+
+    gfx->drawLine(60, 172, 330, 172, COLOR_LABEL);
+
+    if (current_mobile.last_active.valid) {
+        const LastActiveStation &s = current_mobile.last_active;
+        draw_centered_text("LAST HEARD", 195, 202, 2, COLOR_LABEL);
+        draw_centered_text(s.callsign, 195, 230, 3, RGB565_WHITE, true);
+
+        char sub_line[24];
+        snprintf(sub_line, sizeof(sub_line), "%dm ago", s.minutes_ago);
+        draw_centered_text(sub_line, 195, 254, 2, COLOR_MUTED);
+
+        char loc_line[16];
+        snprintf(loc_line, sizeof(loc_line), "%.1f mi %s", s.distance_mi, s.bearing);
+        draw_centered_text(loc_line, 195, 276, 2, COLOR_LABEL);
+    } else {
+        // Quiet state -- legitimate and calm, not an error.
+        draw_centered_text("All quiet", 195, 232, 2, COLOR_TEAL);
+        draw_centered_text("No activity in the last hour", 195, 256, 2, COLOR_LABEL);
+    }
+
+    gfx->drawLine(60, 292, 330, 292, COLOR_LABEL);
+
+    char footer_str[24];
+    format_age(current_mobile.fetched_at_millis, footer_str, sizeof(footer_str));
+    draw_centered_text(footer_str, 195, 318, 2, staleness_color(current_mobile.fetched_at_millis));
+}
+
+static void render_mobile_recent_screen() {
+    display_clear();
+
+    draw_centered_text("RECENT", 195, 30, 2, COLOR_TEAL, true);
+    draw_centered_text("within 20 mi", 195, 56, 2, COLOR_LABEL);
+
+    gfx->drawLine(55, 74, 335, 74, COLOR_LABEL);
+
+    if (!have_mobile_data) {
+        display_show_boot_message("Recent", "Waiting for data...");
+        return;
+    }
+
+    if (current_mobile.recent_count == 0) {
+        draw_centered_text("No recent activity", 195, 190, 2, COLOR_MUTED);
+    } else {
+        // Three evenly-spaced rows, all kept close to vertical center
+        // deliberately -- learned from Weather's own round-display
+        // fixes, applied proactively here rather than rediscovered.
+        int row_y[3] = {110, 182, 254};
+        int div_y[2] = {146, 218};
+
+        for (int i = 0; i < current_mobile.recent_count; i++) {
+            const LastActiveStation &s = current_mobile.recent[i];
+            draw_centered_text(s.callsign, 195, row_y[i], 3, RGB565_WHITE, true);
+
+            char sub_line[32];
+            snprintf(sub_line, sizeof(sub_line), "%.1f mi %s - %dm ago",
+                      s.distance_mi, s.bearing, s.minutes_ago);
+            draw_centered_text(sub_line, 195, row_y[i] + 22, 2, COLOR_MUTED);
+
+            if (i < current_mobile.recent_count - 1 && i < 2) {
+                gfx->drawLine(80, div_y[i], 310, div_y[i], COLOR_FOOTER);
+            }
+        }
+    }
+
+    gfx->drawLine(55, 300, 335, 300, COLOR_LABEL);
+    draw_centered_text("press to return", 195, 324, 2, COLOR_FOOTER);
 }
 
 static void render_mobile_screen() {
-    display_clear();
-    draw_centered_text("MOBILE", 195, 100, 2, COLOR_TEAL, true);
-    draw_centered_text("Not yet built", 195, 140, 2, COLOR_LABEL);
-    if (have_mobile_data) {
-        char count_line[24];
-        snprintf(count_line, sizeof(count_line), "%d active, last hr", current_mobile.mobile_count_1h);
-        draw_centered_text(count_line, 195, 190, 2, COLOR_MUTED);
+    if (mobile_show_recent) {
+        render_mobile_recent_screen();
+    } else {
+        render_mobile_main_screen();
     }
 }
 
@@ -333,6 +473,15 @@ void loop() {
         last_interaction_millis = now;
     }
 
+    // Weather's swap state only persists within one continuous visit --
+    // any real navigation resets it, so arriving at Weather is always
+    // predictable rather than showing whatever was left over.
+    if (evt == EncoderEvent::ROTATE_CW || evt == EncoderEvent::ROTATE_CCW ||
+        evt == EncoderEvent::LONG_PRESS) {
+        weather_swapped = false;
+        mobile_show_recent = false;
+    }
+
     switch (evt) {
         case EncoderEvent::ROTATE_CW:
             if (current_screen == Screen::CONFIG) {
@@ -353,10 +502,13 @@ void loop() {
             break;
 
         case EncoderEvent::SHORT_PRESS:
-            // Screen-dependent behaviors (Weather station swap, Mobile
-            // Activity's Recent Stations sub-view) are deliberately NOT
-            // part of this pass -- navigation scaffolding only. No-op
-            // for now.
+            if (current_screen == Screen::WEATHER && current_weather.secondary.valid) {
+                weather_swapped = !weather_swapped;
+                needs_render = true;
+            } else if (current_screen == Screen::MOBILE) {
+                mobile_show_recent = !mobile_show_recent;
+                needs_render = true;
+            }
             break;
 
         case EncoderEvent::LONG_PRESS:
