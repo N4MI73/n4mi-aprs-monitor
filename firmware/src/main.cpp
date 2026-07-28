@@ -259,59 +259,60 @@ static void render_weather_screen() {
 static void render_overview_screen() {
     display_clear();
 
-    draw_centered_text("OVERVIEW", 195, 30, 2, COLOR_TEAL, true);
+    draw_centered_text("APRSMON", 195, 16, 2, COLOR_FOOTER);
+    draw_centered_text("OVERVIEW", 195, 40, 2, COLOR_TEAL, true);
 
     // -- Weather section --
-    draw_centered_text("WEATHER", 195, 58, 2, COLOR_LABEL);
+    draw_centered_text("WEATHER", 195, 64, 2, COLOR_LABEL, true);
 
     if (have_weather_data) {
         const WeatherStation &p = current_weather.primary;
 
         char temp_str[16];
         snprintf(temp_str, sizeof(temp_str), "%.0fF", p.temp_f);
-        draw_centered_text(temp_str, 195, 104, 5, RGB565_WHITE, true);
+        draw_centered_text(temp_str, 195, 108, 5, RGB565_WHITE, true);
 
+        // 56px clearance below the size-5 temp -- same proportional gap
+        // Weather's own size-7 temp needed (68px there), scaled down.
+        // The earlier version used 26px here, which is what caused the
+        // real overlap seen on hardware.
         char humidity_str[24];
         snprintf(humidity_str, sizeof(humidity_str), "Humidity %.0f%%", p.humidity_pct);
-        draw_centered_text(humidity_str, 195, 130, 2, COLOR_MUTED);
+        draw_centered_text(humidity_str, 195, 164, 3, COLOR_MUTED);
 
-        // Rain callout only appears when actually raining -- dry
-        // conditions show nothing extra, matching the approved mockup.
         if (p.rain_1h_in > 0.0f) {
             char rain_str[24];
             snprintf(rain_str, sizeof(rain_str), "Rain %.2f in/hr", p.rain_1h_in);
-            draw_centered_text(rain_str, 195, 152, 2, COLOR_RAIN);
+            draw_centered_text(rain_str, 195, 192, 2, COLOR_RAIN);
         }
     } else {
-        draw_centered_text("Waiting for data...", 195, 110, 2, COLOR_LABEL);
+        draw_centered_text("Waiting for data...", 195, 120, 2, COLOR_LABEL);
     }
 
-    gfx->drawLine(60, 172, 330, 172, COLOR_LABEL);
+    gfx->drawLine(60, 222, 330, 222, COLOR_LABEL);
 
     // -- Mobile section --
-    draw_centered_text("MOBILE", 195, 198, 2, COLOR_LABEL);
+    draw_centered_text("MOBILE", 195, 248, 2, COLOR_LABEL, true);
 
     if (have_mobile_data) {
         if (current_mobile.last_active.valid) {
             const LastActiveStation &s = current_mobile.last_active;
-            draw_centered_text(s.callsign, 195, 228, 3, RGB565_WHITE, true);
+            draw_centered_text(s.callsign, 195, 278, 3, RGB565_WHITE, true);
 
             char sub_line[40];
             snprintf(sub_line, sizeof(sub_line), "%.1f mi %s - %dm ago",
                       s.distance_mi, s.bearing, s.minutes_ago);
-            draw_centered_text(sub_line, 195, 254, 2, COLOR_MUTED);
+            draw_centered_text(sub_line, 195, 306, 2, COLOR_MUTED);
         } else {
-            // Quiet state -- legitimate and calm, not an error, same
-            // "quiet is okay" principle as PropMon's ALL CLEAR state.
-            draw_centered_text("No activity in the last hour", 195, 232, 2, COLOR_MUTED);
+            draw_centered_text("No activity in last hour", 195, 284, 2, COLOR_MUTED);
         }
     } else {
-        draw_centered_text("Waiting for data...", 195, 232, 2, COLOR_LABEL);
+        draw_centered_text("Waiting for data...", 195, 284, 2, COLOR_LABEL);
     }
 
-    gfx->drawLine(60, 274, 330, 274, COLOR_LABEL);
+    gfx->drawLine(60, 330, 330, 330, COLOR_LABEL);
 
-    draw_centered_text("Rotate to cycle", 195, 300, 2, COLOR_FOOTER);
+    draw_centered_text("Rotate to cycle", 195, 352, 2, COLOR_FOOTER);
 }
 
 static void render_mobile_main_screen() {
@@ -327,34 +328,36 @@ static void render_mobile_main_screen() {
 
     char count_str[8];
     snprintf(count_str, sizeof(count_str), "%d", current_mobile.mobile_count_1h);
-    draw_centered_text(count_str, 195, 122, 7, RGB565_WHITE, true);
-    draw_centered_text("active last hour", 195, 146, 2, COLOR_MUTED);
+    draw_centered_text(count_str, 195, 104, 7, RGB565_WHITE, true);
 
-    gfx->drawLine(60, 172, 330, 172, COLOR_LABEL);
+    // 68px clearance below the size-7 count -- exact same gap Weather's
+    // own size-7 temp uses (100 -> 168), proven correct on hardware.
+    // The earlier version used 24px here, which is what caused the
+    // real overlap seen on hardware.
+    draw_centered_text("active last hour", 195, 172, 3, COLOR_MUTED, true);
+
+    gfx->drawLine(60, 206, 330, 206, COLOR_LABEL);
 
     if (current_mobile.last_active.valid) {
         const LastActiveStation &s = current_mobile.last_active;
-        draw_centered_text("LAST HEARD", 195, 202, 2, COLOR_LABEL);
-        draw_centered_text(s.callsign, 195, 230, 3, RGB565_WHITE, true);
+        draw_centered_text("LAST HEARD", 195, 232, 2, COLOR_LABEL, true);
+        draw_centered_text(s.callsign, 195, 258, 3, RGB565_WHITE, true);
 
-        char sub_line[24];
-        snprintf(sub_line, sizeof(sub_line), "%dm ago", s.minutes_ago);
-        draw_centered_text(sub_line, 195, 254, 2, COLOR_MUTED);
-
-        char loc_line[16];
-        snprintf(loc_line, sizeof(loc_line), "%.1f mi %s", s.distance_mi, s.bearing);
-        draw_centered_text(loc_line, 195, 276, 2, COLOR_LABEL);
+        char sub_line[40];
+        snprintf(sub_line, sizeof(sub_line), "%.1f mi %s - %dm ago",
+                  s.distance_mi, s.bearing, s.minutes_ago);
+        draw_centered_text(sub_line, 195, 282, 2, COLOR_MUTED);
     } else {
         // Quiet state -- legitimate and calm, not an error.
-        draw_centered_text("All quiet", 195, 232, 2, COLOR_TEAL);
-        draw_centered_text("No activity in the last hour", 195, 256, 2, COLOR_LABEL);
+        draw_centered_text("All quiet", 195, 248, 3, COLOR_TEAL, true);
+        draw_centered_text("No activity in last hour", 195, 274, 2, COLOR_LABEL);
     }
 
-    gfx->drawLine(60, 292, 330, 292, COLOR_LABEL);
+    gfx->drawLine(60, 308, 330, 308, COLOR_LABEL);
 
     char footer_str[24];
     format_age(current_mobile.fetched_at_millis, footer_str, sizeof(footer_str));
-    draw_centered_text(footer_str, 195, 318, 2, staleness_color(current_mobile.fetched_at_millis));
+    draw_centered_text(footer_str, 195, 332, 2, staleness_color(current_mobile.fetched_at_millis));
 }
 
 static void render_mobile_recent_screen() {
