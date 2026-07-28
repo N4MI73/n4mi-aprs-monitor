@@ -257,6 +257,9 @@ def prune_loop():
 # JSON snapshot
 # ---------------------------------------------------------------------------
 
+RECENT_LIST_MAX = 3
+
+
 def compute_snapshot():
     now = datetime.now(timezone.utc)
     with state_lock:
@@ -266,21 +269,27 @@ def compute_snapshot():
         }
 
     count = len(active)
-    if count == 0:
-        last_active = None
-    else:
-        latest_call = max(active, key=lambda c: active[c]["last_heard"])
-        s = active[latest_call]
-        last_active = {
-            "callsign": latest_call,
+
+    # Sort once, newest first -- both last_active and recent[] are
+    # derived from the same ordering, so they can never disagree about
+    # which station is "most recent."
+    ordered = sorted(active.items(), key=lambda kv: kv[1]["last_heard"], reverse=True)
+
+    def format_entry(callsign, s):
+        return {
+            "callsign": callsign,
             "minutes_ago": int((now - s["last_heard"]).total_seconds() // 60),
             "distance_mi": s["distance_mi"],
             "bearing": s["bearing"],
         }
 
+    last_active = format_entry(*ordered[0]) if ordered else None
+    recent = [format_entry(c, s) for c, s in ordered[:RECENT_LIST_MAX]]
+
     return {
         "mobile_count_1h": count,
         "last_active": last_active,
+        "recent": recent,
         "updated": now.isoformat(),
     }
 
