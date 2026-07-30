@@ -115,3 +115,14 @@
 // backend's own update cadence -- the backend itself updates
 // continuously as real APRS-IS packets arrive.
 #define MOBILE_FETCH_INTERVAL_MS (60UL * 1000UL)
+
+// ---------------------------------------------------------------------
+// Alerts screen thresholds
+// ---------------------------------------------------------------------
+// Starting guesses, not researched values -- worth revisiting once real
+// data shows how often these actually fire. Checked against both
+// weather stations independently; the worst active alert wins.
+#define GUST_CAUTION_MPH    25.0f
+#define GUST_WARNING_MPH    40.0f
+#define RAIN_CAUTION_IN_HR  0.25f
+#define RAIN_WARNING_IN_HR  0.50f

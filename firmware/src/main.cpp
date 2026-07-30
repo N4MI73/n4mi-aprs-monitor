@@ -18,6 +18,7 @@
 // have real content yet.
 
 #include <Arduino.h>
+#include <WiFi.h>
 #include "config.h"
 #include "display_driver.h"
 #include "wifi_client.h"
@@ -37,6 +38,7 @@ enum class Screen {
     OVERVIEW,
     MOBILE,
     WEATHER,
+    ALERTS,
     CONFIG,  // reached via long press from any of the above -- NOT part
              // of the normal rotation cycle, matching PropMon's Config
              // screen behavior exactly.
@@ -55,15 +57,17 @@ static Screen next_screen(Screen s) {
     switch (s) {
         case Screen::OVERVIEW: return Screen::MOBILE;
         case Screen::MOBILE:   return Screen::WEATHER;
-        case Screen::WEATHER:  return Screen::OVERVIEW;
+        case Screen::WEATHER:  return Screen::ALERTS;
+        case Screen::ALERTS:   return Screen::OVERVIEW;
         default:                return Screen::OVERVIEW;
     }
 }
 static Screen prev_screen(Screen s) {
     switch (s) {
-        case Screen::OVERVIEW: return Screen::WEATHER;
+        case Screen::OVERVIEW: return Screen::ALERTS;
         case Screen::MOBILE:   return Screen::OVERVIEW;
         case Screen::WEATHER:  return Screen::MOBILE;
+        case Screen::ALERTS:   return Screen::WEATHER;
         default:                return Screen::OVERVIEW;
     }
 }
@@ -77,6 +81,7 @@ static uint16_t COLOR_MUTED;
 static uint16_t COLOR_STALE;
 static uint16_t COLOR_FOOTER;
 static uint16_t COLOR_RAIN;
+static uint16_t COLOR_RED;
 
 static void init_colors() {
     COLOR_TEAL   = gfx->color565(0x5D, 0xCA, 0xA5);
@@ -89,6 +94,7 @@ static void init_colors() {
                                                        // ui_common is ported
     COLOR_FOOTER = gfx->color565(0x5F, 0x5E, 0x5A);
     COLOR_RAIN   = gfx->color565(0x37, 0x8A, 0xDD);
+    COLOR_RED    = gfx->color565(0xE2, 0x4B, 0x4A);
 }
 
 // ---------------------------------------------------------------------
@@ -251,6 +257,111 @@ static void render_weather_screen() {
 }
 
 // ---------------------------------------------------------------------
+// Alerts -- evaluates weather thresholds against both stations. Reuses
+// PropMon's exact severity tiers rather than inventing new ones.
+// Structured so a future source (e.g. KC4GS-13's early-warning checks,
+// planned next session) slots in as one more candidate here, not a
+// restructuring.
+// ---------------------------------------------------------------------
+
+enum class AlertLevel { NONE, CAUTION, WARNING, CRITICAL };
+
+struct WeatherAlert {
+    AlertLevel level = AlertLevel::NONE;
+    char message[24] = "";
+    char station_line[28] = "";
+};
+
+static AlertLevel gust_level(float mph) {
+    if (mph >= GUST_WARNING_MPH) return AlertLevel::WARNING;
+    if (mph >= GUST_CAUTION_MPH) return AlertLevel::CAUTION;
+    return AlertLevel::NONE;
+}
+
+static AlertLevel rain_level(float in_hr) {
+    if (in_hr >= RAIN_WARNING_IN_HR) return AlertLevel::WARNING;
+    if (in_hr >= RAIN_CAUTION_IN_HR) return AlertLevel::CAUTION;
+    return AlertLevel::NONE;
+}
+
+static void add_candidate_if_alert(AlertLevel level, const char *msg_fmt, float value,
+                                     const WeatherStation &station,
+                                     WeatherAlert *candidates, int &n) {
+    if (level == AlertLevel::NONE || n >= 4) return;
+    WeatherAlert &c = candidates[n++];
+    c.level = level;
+    snprintf(c.message, sizeof(c.message), msg_fmt, value);
+    snprintf(c.station_line, sizeof(c.station_line), "%s - %.1f mi %s",
+              station.callsign, station.distance_mi, station.bearing);
+}
+
+// Finds the single worst active weather alert and how many total are
+// active. `out` is untouched (stays AlertLevel::NONE) if nothing is
+// active -- callers should check total_count, not just out.level,
+// since a zero-count call leaves out in its default state either way.
+static void find_worst_weather_alert(WeatherAlert &out, int &total_count) {
+    WeatherAlert candidates[4];
+    int n = 0;
+
+    if (have_weather_data) {
+        const WeatherStation &p = current_weather.primary;
+        add_candidate_if_alert(gust_level(p.wind_gust_mph), "Gust %.0f mph", p.wind_gust_mph, p, candidates, n);
+        add_candidate_if_alert(rain_level(p.rain_1h_in), "Rain %.2f in/hr", p.rain_1h_in, p, candidates, n);
+
+        if (current_weather.secondary.valid) {
+            const WeatherStation &s = current_weather.secondary;
+            add_candidate_if_alert(gust_level(s.wind_gust_mph), "Gust %.0f mph", s.wind_gust_mph, s, candidates, n);
+            add_candidate_if_alert(rain_level(s.rain_1h_in), "Rain %.2f in/hr", s.rain_1h_in, s, candidates, n);
+        }
+    }
+
+    total_count = n;
+    for (int i = 0; i < n; i++) {
+        if ((int)candidates[i].level > (int)out.level) {
+            out = candidates[i];
+        }
+    }
+}
+
+static void render_alerts_screen() {
+    display_clear();
+
+    draw_centered_text("ALERTS", 195, 34, 3, COLOR_TEAL, true);
+    gfx->drawLine(60, 64, 330, 64, COLOR_LABEL);
+
+    WeatherAlert worst;
+    int count = 0;
+    find_worst_weather_alert(worst, count);
+
+    if (count == 0) {
+        // Legitimate calm state -- same "quiet is okay" principle used
+        // everywhere else in this series.
+        draw_centered_text("ALL CLEAR", 195, 200, 4, COLOR_TEAL, true);
+        draw_centered_text("No active alerts", 195, 240, 2, COLOR_LABEL);
+    } else {
+        uint16_t level_color = (worst.level == AlertLevel::CAUTION) ? COLOR_STALE : COLOR_RED;
+        const char *level_word =
+            (worst.level == AlertLevel::CAUTION)  ? "CAUTION" :
+            (worst.level == AlertLevel::WARNING)  ? "WARNING" : "CRITICAL";
+
+        draw_centered_text("WEATHER", 195, 108, 2, COLOR_LABEL);
+        draw_centered_text(level_word, 195, 138, 3, level_color, true);
+        draw_centered_text(worst.message, 195, 170, 2, COLOR_MUTED);
+        draw_centered_text(worst.station_line, 195, 192, 2, COLOR_LABEL);
+
+        if (count > 1) {
+            char more_line[20];
+            snprintf(more_line, sizeof(more_line), "+%d more alert%s",
+                      count - 1, (count - 1 == 1) ? "" : "s");
+            draw_centered_text(more_line, 195, 228, 2, COLOR_FOOTER);
+        }
+    }
+
+    gfx->drawLine(60, 330, 330, 330, COLOR_LABEL);
+    draw_centered_text("Rotate to cycle", 195, 356, 2, COLOR_FOOTER);
+}
+
+// ---------------------------------------------------------------------
 // Overview, Mobile Activity, Config -- honest placeholders. Real
 // content and behavior for each is separate, later work; this pass
 // only needs navigation TO them to work correctly.
@@ -405,9 +516,47 @@ static void render_mobile_screen() {
 
 static void render_config_screen() {
     display_clear();
-    draw_centered_text("CONFIG", 195, 100, 2, COLOR_TEAL, true);
-    draw_centered_text("Not yet built", 195, 140, 2, COLOR_LABEL);
-    draw_centered_text("Long press to return", 195, 190, 2, COLOR_MUTED);
+
+    draw_centered_text("CONFIG", 195, 34, 3, COLOR_TEAL, true);
+    gfx->drawLine(60, 64, 330, 64, COLOR_LABEL);
+
+    // -- Wi-Fi --
+    draw_centered_text("WI-FI", 195, 88, 2, COLOR_LABEL);
+    if (WiFi.status() == WL_CONNECTED) {
+        draw_centered_text("Connected", 195, 112, 3, COLOR_TEAL, true);
+        draw_centered_text(WiFi.localIP().toString().c_str(), 195, 142, 2, COLOR_MUTED);
+    } else {
+        draw_centered_text("Disconnected", 195, 112, 3, COLOR_STALE, true);
+    }
+
+    gfx->drawLine(60, 164, 330, 164, COLOR_LABEL);
+
+    // -- Weather --
+    draw_centered_text("WEATHER", 195, 188, 2, COLOR_LABEL);
+    if (have_weather_data) {
+        char line[24];
+        char age[16];
+        format_age(current_weather.fetched_at_millis, age, sizeof(age));
+        snprintf(line, sizeof(line), "LIVE - %s", age);
+        draw_centered_text(line, 195, 210, 2, COLOR_TEAL, true);
+    } else {
+        draw_centered_text("Waiting...", 195, 210, 2, COLOR_STALE, true);
+    }
+
+    // -- Mobile --
+    draw_centered_text("MOBILE", 195, 232, 2, COLOR_LABEL);
+    if (have_mobile_data) {
+        char line[24];
+        char age[16];
+        format_age(current_mobile.fetched_at_millis, age, sizeof(age));
+        snprintf(line, sizeof(line), "LIVE - %s", age);
+        draw_centered_text(line, 195, 254, 2, COLOR_TEAL, true);
+    } else {
+        draw_centered_text("Waiting...", 195, 254, 2, COLOR_STALE, true);
+    }
+
+    gfx->drawLine(60, 282, 330, 282, COLOR_LABEL);
+    draw_centered_text("Long press to return", 195, 310, 2, COLOR_FOOTER);
 }
 
 static void render_current_screen() {
@@ -415,6 +564,7 @@ static void render_current_screen() {
         case Screen::OVERVIEW: render_overview_screen(); break;
         case Screen::MOBILE:   render_mobile_screen();   break;
         case Screen::WEATHER:  render_weather_screen();  break;
+        case Screen::ALERTS:   render_alerts_screen();   break;
         case Screen::CONFIG:   render_config_screen();   break;
     }
 }
