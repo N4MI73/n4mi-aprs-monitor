@@ -17,21 +17,34 @@ local operating area right now."
 Unlike Propagation Monitor, this instrument's firmware and backend servers live
 in the same repo.
 
+*Screenshots coming soon.*
+
 ---
 
 ## Status
 
+- **Overview screen: done.** The front door — a condensed glance at both other
+  screens: primary station temp/humidity (plus a rain callout when it's
+  actually raining), and the most recently heard mobile station.
 - **Weather screen: done.** Queries the [aprs.fi API](https://aprs.fi/page/api)
   for 2 fixed, known local weather station callsigns — not a proximity search,
-  since aprs.fi's API doesn't support one by design. Confirmed working on real
-  hardware.
-- **Mobile Activity screen: backend done, firmware not yet built.** Unlike
-  Weather, this needs genuine local proximity data ("what's moving nearby"),
-  which aprs.fi's API can't provide — instead uses a direct, persistent
-  connection to APRS-IS (the amateur radio community's own network), filtered
-  to a 20-mile radius. The listener service is deployed and confirmed working
-  against real traffic; the on-device screen itself is the next piece.
-- **Overview / Alerts screens: not started.**
+  since aprs.fi's API doesn't support one by design. Short press swaps which
+  station is shown large.
+- **Mobile Activity screen: done.** Genuine local proximity data ("what's
+  moving nearby"), via a direct, persistent connection to APRS-IS (the amateur
+  radio community's own network), filtered to a 20-mile radius. Shows a
+  1-hour activity count and the most recently heard station; short press
+  switches to a "Recent Stations" list (last 3 heard).
+- **Navigation: done.** Rotate to cycle Overview → Mobile → Weather. Long
+  press opens Config from any screen. 10-second idle timeout returns to
+  Overview. Both backends fetch continuously in the background regardless of
+  which screen is visible.
+- **All of the above confirmed on real hardware, including real APRS-IS
+  traffic** — not just mock/quiet-state testing.
+- **Config screen: not yet built.** Will show Wi-Fi status, IP, and data
+  source info. Wi-Fi is currently hardcoded credentials; porting Propagation
+  Monitor's real captive-portal setup flow is separate, later work.
+- **Alerts screen: not started.**
 
 ## Repo layout
 
@@ -40,8 +53,19 @@ n4mi-aprs-monitor/
 ├── firmware/                    <- PlatformIO project (open THIS folder in VS Code)
 │   ├── platformio.ini
 │   ├── include/
+│   │   ├── config.h
+│   │   ├── display_driver.h
+│   │   ├── encoder.h
+│   │   ├── wifi_client.h
+│   │   ├── data_client.h        <- Weather
+│   │   └── mobile_client.h      <- Mobile Activity
 │   └── src/
-│       └── main.cpp             <- currently renders the Weather screen
+│       ├── main.cpp             <- screen state machine, all rendering
+│       ├── display_driver.cpp
+│       ├── encoder.cpp
+│       ├── wifi_client.cpp
+│       ├── data_client.cpp
+│       └── mobile_client.cpp
 └── server/                      <- Backend services (each its own Docker deployment)
     ├── aprsmon_server.py        <- Weather: polls aprs.fi
     ├── Dockerfile
