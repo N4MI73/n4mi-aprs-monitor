@@ -57,6 +57,15 @@ FILTER_RADIUS_KM = 32  # 20 miles, converted (aprs-is.net filters use km).
 # parsing pipeline works end-to-end (25 packets, 4 confirmed-moving
 # stations) -- confirmed working, reverted back to the real setting.
 
+# N4MI's own Tempest weather station, relayed to APRS-IS via weewx in a
+# separate Docker container -- unrelated project, but its packets flow
+# through this same connection since it's well within the 20mi filter
+# radius (it's at home). Tracked independently of mobile-station
+# detection below: this is purely a "is that pipeline still alive"
+# liveness check, not weather data (PropMon already gets Tempest data
+# more directly, via WeatherFlow's own API).
+HOME_STATION_CALLSIGN = "N4MI-13"
+
 APRS_IS_HOST = "rotate.aprs2.net"
 APRS_IS_PORT = 14580  # filtered port, NOT the 10152 full-feed firehose
 
@@ -133,6 +142,11 @@ last_position_seen = {}  # callsign -> (lat, lon, datetime)
 # the JSON endpoint actually reads from.
 mobile_state = {}  # callsign -> {distance_mi, bearing, last_heard}
 
+# N4MI-13 liveness -- separate from mobile_state entirely, since a
+# stationary weather station never registers as "moving." None until
+# heard at least once this run.
+home_station_last_heard = None
+
 # Connection diagnostics -- added because Portainer's log viewer isn't
 # available in this deployment (Community Edition limitation), so the
 # service needs to be self-diagnosable purely through its HTTP API.
@@ -163,14 +177,21 @@ def is_moving(callsign, lat, lon, speed_knots):
 # ---------------------------------------------------------------------------
 
 def on_packet(packet):
-    global total_packets_seen
+    global total_packets_seen, home_station_last_heard
     try:
-        if "latitude" not in packet or "longitude" not in packet:
-            return  # not a position report -- status/telemetry/etc, ignore
-
         callsign = packet.get("from")
         if not callsign:
             return
+
+        # Home weather station liveness check -- independent of the
+        # mobile-detection logic below, and checked before the
+        # position-report filter since we want to know it was heard at
+        # all, regardless of packet type (weather packets, status, etc).
+        if callsign == HOME_STATION_CALLSIGN:
+            home_station_last_heard = datetime.now(timezone.utc)
+
+        if "latitude" not in packet or "longitude" not in packet:
+            return  # not a position report -- status/telemetry/etc, ignore
 
         total_packets_seen += 1
 
@@ -286,10 +307,15 @@ def compute_snapshot():
     last_active = format_entry(*ordered[0]) if ordered else None
     recent = [format_entry(c, s) for c, s in ordered[:RECENT_LIST_MAX]]
 
+    home_station_minutes_ago = None
+    if home_station_last_heard is not None:
+        home_station_minutes_ago = int((now - home_station_last_heard).total_seconds() // 60)
+
     return {
         "mobile_count_1h": count,
         "last_active": last_active,
         "recent": recent,
+        "home_station_minutes_ago": home_station_minutes_ago,
         "updated": now.isoformat(),
     }
 
@@ -325,6 +351,7 @@ def debug():
         "total_packets_seen": total_packets_seen,
         "tracked_positions": tracked_positions,
         "tracked_mobile_stations": tracked_mobile,
+        "home_station_last_heard": home_station_last_heard.isoformat() if home_station_last_heard else None,
         "filter": f"r/{HOME_LAT}/{HOME_LON}/{FILTER_RADIUS_KM}",
     })
 
