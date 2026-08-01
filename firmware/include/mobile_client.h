@@ -26,6 +26,12 @@ struct MobileData {
 
     char updated[32] = "";       // backend's own last-update time, ISO 8601 UTC
     unsigned long fetched_at_millis = 0;  // local millis() when last populated
+
+    // N4MI-13 (home Tempest weather station, relayed via APRS-IS) --
+    // -1 means never heard this run. Purely a liveness check for a
+    // separate weewx pipeline; not weather data (PropMon already gets
+    // Tempest data more directly via WeatherFlow's own API).
+    int home_station_minutes_ago = -1;
 };
 
 // Fetches from MOBILE_SERVER_URL and parses into a temporary struct

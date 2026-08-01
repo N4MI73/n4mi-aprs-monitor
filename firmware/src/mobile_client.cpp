@@ -58,6 +58,11 @@ bool mobile_client_fetch(MobileData &out) {
     strlcpy(temp.updated, doc["updated"] | "", sizeof(temp.updated));
     temp.fetched_at_millis = millis();
 
+    // -1 sentinel when never heard, matching the backend's null -> our
+    // default rather than treating it as a parse failure.
+    JsonVariant hsma = doc["home_station_minutes_ago"];
+    temp.home_station_minutes_ago = hsma.isNull() ? -1 : hsma.as<int>();
+
     // Parse the recent[] array -- same shape as last_active, just
     // repeated. Missing/absent array is treated as zero entries, not
     // a parse failure (matches last_active's own null-is-legitimate

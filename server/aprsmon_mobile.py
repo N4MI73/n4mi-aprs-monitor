@@ -158,19 +158,24 @@ total_packets_seen = 0  # every position packet, moving or not -- answers
 
 
 def is_moving(callsign, lat, lon, speed_knots):
+    """Returns (moving: bool, reason: str|None). The reason is purely
+    diagnostic -- logged when a station is flagged moving, so a future
+    false positive (like N4MI-13's on 2026-07-31) can actually be
+    root-caused instead of guessed at."""
     if speed_knots is not None and speed_knots > MIN_SPEED_KNOTS:
-        return True
+        return True, f"speed {speed_knots:.1f} kt"
 
     prior = last_position_seen.get(callsign)
     if prior is not None:
         prior_lat, prior_lon, _ = prior
-        if haversine_mi(prior_lat, prior_lon, lat, lon) > MIN_MOVE_DISTANCE_MI:
-            return True
+        moved_mi = haversine_mi(prior_lat, prior_lon, lat, lon)
+        if moved_mi > MIN_MOVE_DISTANCE_MI:
+            return True, f"moved {moved_mi:.2f} mi since last position"
 
     # First-ever sighting with no speed data and nothing to compare against
     # -- deliberately NOT counted as moving. Conservative default: a single
     # ambiguous packet shouldn't flag a possibly-stationary station.
-    return False
+    return False, None
 
 # ---------------------------------------------------------------------------
 # Packet handling
@@ -189,6 +194,14 @@ def on_packet(packet):
         # all, regardless of packet type (weather packets, status, etc).
         if callsign == HOME_STATION_CALLSIGN:
             home_station_last_heard = datetime.now(timezone.utc)
+            # Known-stationary reference station -- never eligible for
+            # mobile-detection, regardless of what any individual packet
+            # reports. A real false positive was observed 2026-07-31
+            # (flagged "moving" 0.6mi WSW, likely GPS jitter or a stray
+            # speed value in the weewx-generated packet -- not
+            # root-caused, but irrelevant here since we already know by
+            # definition this station doesn't move).
+            return
 
         if "latitude" not in packet or "longitude" not in packet:
             return  # not a position report -- status/telemetry/etc, ignore
@@ -200,7 +213,7 @@ def on_packet(packet):
         speed = packet.get("speed")  # knots, assumed -- see module docstring
 
         now = datetime.now(timezone.utc)
-        moving = is_moving(callsign, lat, lon, speed)
+        moving, reason = is_moving(callsign, lat, lon, speed)
 
         with state_lock:
             last_position_seen[callsign] = (lat, lon, now)
@@ -211,7 +224,7 @@ def on_packet(packet):
                     "bearing": b,
                     "last_heard": now,
                 }
-                log.info("Moving: %s at %.1f mi %s", callsign, d, b)
+                log.info("Moving: %s at %.1f mi %s (%s)", callsign, d, b, reason)
 
     except Exception as exc:
         # A single malformed/unexpected packet should never take down the

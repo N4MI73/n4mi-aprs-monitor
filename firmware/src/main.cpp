@@ -468,10 +468,10 @@ static void render_mobile_main_screen() {
 static void render_mobile_recent_screen() {
     display_clear();
 
-    draw_centered_text("RECENT", 195, 30, 2, COLOR_TEAL, true);
-    draw_centered_text("within 20 mi", 195, 56, 2, COLOR_LABEL);
+    draw_centered_text("RECENT", 195, 30, 3, COLOR_TEAL, true);
+    draw_centered_text("within 20 mi", 195, 62, 2, COLOR_LABEL);
 
-    gfx->drawLine(55, 74, 335, 74, COLOR_LABEL);
+    gfx->drawLine(55, 90, 335, 90, COLOR_LABEL);
 
     if (!have_mobile_data) {
         display_show_boot_message("Recent", "Waiting for data...");
@@ -479,13 +479,13 @@ static void render_mobile_recent_screen() {
     }
 
     if (current_mobile.recent_count == 0) {
-        draw_centered_text("No recent activity", 195, 190, 2, COLOR_MUTED);
+        draw_centered_text("No recent activity", 195, 200, 2, COLOR_MUTED);
     } else {
         // Three evenly-spaced rows, all kept close to vertical center
         // deliberately -- learned from Weather's own round-display
         // fixes, applied proactively here rather than rediscovered.
-        int row_y[3] = {110, 182, 254};
-        int div_y[2] = {146, 218};
+        int row_y[3] = {126, 198, 270};
+        int div_y[2] = {162, 234};
 
         for (int i = 0; i < current_mobile.recent_count; i++) {
             const LastActiveStation &s = current_mobile.recent[i];
@@ -502,8 +502,8 @@ static void render_mobile_recent_screen() {
         }
     }
 
-    gfx->drawLine(55, 300, 335, 300, COLOR_LABEL);
-    draw_centered_text("press to return", 195, 324, 2, COLOR_FOOTER);
+    gfx->drawLine(55, 316, 335, 316, COLOR_LABEL);
+    draw_centered_text("press to return", 195, 340, 2, COLOR_FOOTER);
 }
 
 static void render_mobile_screen() {
@@ -517,46 +517,58 @@ static void render_mobile_screen() {
 static void render_config_screen() {
     display_clear();
 
-    draw_centered_text("CONFIG", 195, 34, 3, COLOR_TEAL, true);
-    gfx->drawLine(60, 64, 330, 64, COLOR_LABEL);
+    draw_centered_text("CONFIG", 195, 30, 3, COLOR_TEAL, true);
+    gfx->drawLine(60, 60, 330, 60, COLOR_LABEL);
 
     // -- Wi-Fi --
-    draw_centered_text("WI-FI", 195, 88, 2, COLOR_LABEL);
+    draw_centered_text("WI-FI", 195, 82, 2, COLOR_LABEL);
     if (WiFi.status() == WL_CONNECTED) {
-        draw_centered_text("Connected", 195, 112, 3, COLOR_TEAL, true);
-        draw_centered_text(WiFi.localIP().toString().c_str(), 195, 142, 2, COLOR_MUTED);
+        draw_centered_text("Connected", 195, 104, 3, COLOR_TEAL, true);
+        draw_centered_text(WiFi.localIP().toString().c_str(), 195, 134, 2, COLOR_MUTED);
     } else {
-        draw_centered_text("Disconnected", 195, 112, 3, COLOR_STALE, true);
+        draw_centered_text("Disconnected", 195, 104, 3, COLOR_STALE, true);
     }
 
-    gfx->drawLine(60, 164, 330, 164, COLOR_LABEL);
+    gfx->drawLine(60, 156, 330, 156, COLOR_LABEL);
 
     // -- Weather --
-    draw_centered_text("WEATHER", 195, 188, 2, COLOR_LABEL);
+    draw_centered_text("WEATHER", 195, 176, 2, COLOR_LABEL);
     if (have_weather_data) {
         char line[24];
         char age[16];
         format_age(current_weather.fetched_at_millis, age, sizeof(age));
         snprintf(line, sizeof(line), "LIVE - %s", age);
-        draw_centered_text(line, 195, 210, 2, COLOR_TEAL, true);
+        draw_centered_text(line, 195, 198, 2, COLOR_TEAL, true);
     } else {
-        draw_centered_text("Waiting...", 195, 210, 2, COLOR_STALE, true);
+        draw_centered_text("Waiting...", 195, 198, 2, COLOR_STALE, true);
     }
 
     // -- Mobile --
-    draw_centered_text("MOBILE", 195, 232, 2, COLOR_LABEL);
+    draw_centered_text("MOBILE", 195, 220, 2, COLOR_LABEL);
     if (have_mobile_data) {
         char line[24];
         char age[16];
         format_age(current_mobile.fetched_at_millis, age, sizeof(age));
         snprintf(line, sizeof(line), "LIVE - %s", age);
-        draw_centered_text(line, 195, 254, 2, COLOR_TEAL, true);
+        draw_centered_text(line, 195, 242, 2, COLOR_TEAL, true);
     } else {
-        draw_centered_text("Waiting...", 195, 254, 2, COLOR_STALE, true);
+        draw_centered_text("Waiting...", 195, 242, 2, COLOR_STALE, true);
     }
 
-    gfx->drawLine(60, 282, 330, 282, COLOR_LABEL);
-    draw_centered_text("Long press to return", 195, 310, 2, COLOR_FOOTER);
+    // -- Home weather station liveness (N4MI-13, separate weewx pipeline) --
+    // Only meaningful once Mobile's own backend has actually returned
+    // data at least once; -1 in that data means "never heard yet."
+    draw_centered_text("HOME WX", 195, 264, 2, COLOR_LABEL);
+    if (have_mobile_data && current_mobile.home_station_minutes_ago >= 0) {
+        char line[24];
+        snprintf(line, sizeof(line), "LIVE - %dm ago", current_mobile.home_station_minutes_ago);
+        draw_centered_text(line, 195, 286, 2, COLOR_TEAL, true);
+    } else {
+        draw_centered_text("Not heard yet", 195, 286, 2, COLOR_STALE, true);
+    }
+
+    gfx->drawLine(60, 308, 330, 308, COLOR_LABEL);
+    draw_centered_text("Long press to return", 195, 330, 2, COLOR_FOOTER);
 }
 
 static void render_current_screen() {
