@@ -42,9 +42,24 @@ enum class Screen {
     CONFIG,  // reached via long press from any of the above -- NOT part
              // of the normal rotation cycle, matching PropMon's Config
              // screen behavior exactly.
+    SETUP,   // reached by holding PAST the point Config triggers (the
+             // RESET_HOLD event) -- "hold longer to go further", same
+             // gesture PropMon itself used for this same purpose.
+             // Wi-Fi setup Stage 1: placeholder only, no real portal yet.
 };
 
 static Screen current_screen = Screen::OVERVIEW;
+
+// Hold-progress bar: 0 means no bar currently drawn on screen. Tracked
+// separately from encoder_get_hold_ms() itself so we know when a
+// release needs to trigger a redraw to erase a partially-grown bar.
+static uint32_t last_hold_bar_width = 0;
+
+// Reused for both Config and Setup -- both are reached via the same
+// physical long-press gesture (Setup only differs by the hold
+// continuing further), so this correctly captures "the screen active
+// before this whole hold began" regardless of which of the two it's
+// returning from.
 static Screen screen_before_config = Screen::OVERVIEW;
 
 // Rotation order confirmed this session: Overview -> Mobile -> Weather
@@ -186,6 +201,32 @@ static uint16_t staleness_color(unsigned long fetched_at_millis) {
     if (fetched_at_millis == 0) return COLOR_STALE;
     if (millis() - fetched_at_millis > STALE_DATA_THRESHOLD_MS) return COLOR_STALE;
     return COLOR_FOOTER;
+}
+
+// ---------------------------------------------------------------------
+// Long-press hold-progress bar. PropMon's own real history here: a
+// first design (a ring of ~90 small drawLine() calls) never rendered
+// on real hardware despite correct underlying logic -- root-caused to
+// a genuine quirk of this display/library combination, where single
+// primitive calls of any size render reliably but many small
+// primitives fired in a loop do not. Fixed there with a single growing
+// fillRect() bar; reused directly here rather than rediscovering the
+// same failure.
+//
+// Deliberately single-phase, matching what PropMon actually shipped:
+// fills 0->100% across LONG_PRESS_MS (the Config threshold), then just
+// sits full during the extended hold toward RESET_HOLD_MS (Setup) --
+// PropMon's own second-phase fill for that extended window was a
+// documented, deferred backlog item there too, never actually built.
+// ---------------------------------------------------------------------
+
+#define HOLD_BAR_MAX_WIDTH 100
+#define HOLD_BAR_HEIGHT    6
+#define HOLD_BAR_Y         10
+
+static void draw_hold_progress_bar(uint32_t width_px) {
+    int x0 = 195 - HOLD_BAR_MAX_WIDTH / 2;
+    gfx->fillRect(x0, HOLD_BAR_Y, (int)width_px, HOLD_BAR_HEIGHT, COLOR_TEAL);
 }
 
 // ---------------------------------------------------------------------
@@ -606,6 +647,29 @@ static void render_config_screen() {
     draw_centered_text("Long press to return", 195, 330, 2, COLOR_FOOTER);
 }
 
+// Wi-Fi setup Stage 1 -- honest placeholder, matching PropMon's own
+// precedent for this exact screen. No real portal exists yet; that's
+// Stage 2. Reached by continuing a long press past the point Config
+// normally triggers (the RESET_HOLD event).
+static void render_setup_screen() {
+    display_clear();
+
+    draw_centered_text("SETUP", 195, 34, 3, COLOR_TEAL, true);
+    gfx->drawLine(60, 60, 330, 60, COLOR_LABEL);
+
+    draw_centered_text("Wi-Fi setup portal", 195, 130, 2, COLOR_MUTED);
+    draw_centered_text("not yet built", 195, 154, 2, COLOR_MUTED);
+
+    gfx->drawLine(60, 200, 330, 200, COLOR_LABEL);
+
+    draw_centered_text("Currently using", 195, 230, 2, COLOR_LABEL);
+    draw_centered_text("stored or hardcoded", 195, 254, 2, COLOR_LABEL);
+    draw_centered_text("credentials", 195, 278, 2, COLOR_LABEL);
+
+    draw_centered_text("Rotate or long press", 195, 316, 2, COLOR_FOOTER);
+    draw_centered_text("to return", 195, 338, 2, COLOR_FOOTER);
+}
+
 static void render_current_screen() {
     switch (current_screen) {
         case Screen::OVERVIEW: render_overview_screen(); break;
@@ -613,6 +677,7 @@ static void render_current_screen() {
         case Screen::WEATHER:  render_weather_screen();  break;
         case Screen::ALERTS:   render_alerts_screen();   break;
         case Screen::CONFIG:   render_config_screen();   break;
+        case Screen::SETUP:    render_setup_screen();    break;
     }
 }
 
@@ -663,6 +728,31 @@ void loop() {
     bool needs_render = false;
 
     EncoderEvent evt = encoder_poll();
+
+    // Hold-progress bar -- independent of encoder_poll()'s discrete
+    // events, since it needs to update WHILE a press is still ongoing,
+    // not just after it resolves. encoder_get_hold_ms() is read-only
+    // and doesn't affect the press/release state machine at all.
+    uint32_t hold_ms = encoder_get_hold_ms();
+    if (hold_ms > 0) {
+        uint32_t capped_ms = (hold_ms > (uint32_t)LONG_PRESS_MS) ? (uint32_t)LONG_PRESS_MS : hold_ms;
+        uint32_t bar_width = (capped_ms * HOLD_BAR_MAX_WIDTH) / (uint32_t)LONG_PRESS_MS;
+        if (bar_width != last_hold_bar_width) {
+            draw_hold_progress_bar(bar_width);
+            last_hold_bar_width = bar_width;
+        }
+    } else if (last_hold_bar_width != 0) {
+        // Button was just released. Most release paths already trigger
+        // a full redraw below (LONG_PRESS/RESET_HOLD change screens;
+        // Weather/Mobile's SHORT_PRESS already redraws) -- but a short
+        // press on a screen with no short-press behavior (Overview,
+        // Alerts, Config, Setup) wouldn't otherwise redraw, which would
+        // leave a partially-grown bar stuck on screen until the next
+        // tick. Force it here so every release path is covered.
+        needs_render = true;
+        last_hold_bar_width = 0;
+    }
+
     if (evt != EncoderEvent::NONE) {
         last_interaction_millis = now;
     }
@@ -678,7 +768,7 @@ void loop() {
 
     switch (evt) {
         case EncoderEvent::ROTATE_CW:
-            if (current_screen == Screen::CONFIG) {
+            if (current_screen == Screen::CONFIG || current_screen == Screen::SETUP) {
                 current_screen = screen_before_config;
             } else {
                 current_screen = prev_screen(current_screen);
@@ -687,7 +777,7 @@ void loop() {
             break;
 
         case EncoderEvent::ROTATE_CCW:
-            if (current_screen == Screen::CONFIG) {
+            if (current_screen == Screen::CONFIG || current_screen == Screen::SETUP) {
                 current_screen = screen_before_config;
             } else {
                 current_screen = next_screen(current_screen);
@@ -706,7 +796,7 @@ void loop() {
             break;
 
         case EncoderEvent::LONG_PRESS:
-            if (current_screen == Screen::CONFIG) {
+            if (current_screen == Screen::CONFIG || current_screen == Screen::SETUP) {
                 current_screen = screen_before_config;
             } else {
                 screen_before_config = current_screen;
@@ -716,8 +806,15 @@ void loop() {
             break;
 
         case EncoderEvent::RESET_HOLD:
-            // Real Wi-Fi setup portal not yet built -- deliberately a
-            // no-op. See config.h's KNOB_RESET_HOLD_MS comment.
+            // "Hold longer to go further" -- overrides whatever
+            // LONG_PRESS just did for this same physical hold (which
+            // already tentatively entered Config, capturing
+            // screen_before_config as the real pre-hold screen just
+            // before doing so). Reuse that same captured value as
+            // where Setup should return to -- no separate tracking
+            // variable needed.
+            current_screen = Screen::SETUP;
+            needs_render = true;
             break;
 
         default:
