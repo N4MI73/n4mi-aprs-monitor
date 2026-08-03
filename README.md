@@ -23,28 +23,36 @@ in the same repo.
 
 ## Status
 
-- **Overview screen: done.** The front door — a condensed glance at both other
-  screens: primary station temp/humidity (plus a rain callout when it's
-  actually raining), and the most recently heard mobile station.
-- **Weather screen: done.** Queries the [aprs.fi API](https://aprs.fi/page/api)
-  for 2 fixed, known local weather station callsigns — not a proximity search,
+**All five screens are built and confirmed working on real hardware.**
+
+- **Overview:** the front door — a condensed glance at both other screens:
+  primary station temp/humidity (plus a rain callout when it's actually
+  raining), and the most recently heard mobile station.
+- **Weather:** queries the [aprs.fi API](https://aprs.fi/page/api) for 2
+  fixed, known local weather station callsigns — not a proximity search,
   since aprs.fi's API doesn't support one by design. Short press swaps which
   station is shown large.
-- **Mobile Activity screen: done.** Genuine local proximity data ("what's
-  moving nearby"), via a direct, persistent connection to APRS-IS (the amateur
-  radio community's own network), filtered to a 20-mile radius. Shows a
-  1-hour activity count and the most recently heard station; short press
-  switches to a "Recent Stations" list (last 3 heard).
-- **Navigation: done.** Rotate to cycle Overview → Mobile → Weather. Long
-  press opens Config from any screen. 10-second idle timeout returns to
-  Overview. Both backends fetch continuously in the background regardless of
-  which screen is visible.
-- **All of the above confirmed on real hardware, including real APRS-IS
-  traffic** — not just mock/quiet-state testing.
-- **Config screen: not yet built.** Will show Wi-Fi status, IP, and data
-  source info. Wi-Fi is currently hardcoded credentials; porting Propagation
-  Monitor's real captive-portal setup flow is separate, later work.
-- **Alerts screen: not started.**
+- **Mobile Activity:** genuine local proximity data ("what's moving nearby"),
+  via a direct, persistent connection to APRS-IS (the amateur radio
+  community's own network), filtered to a 20-mile radius. Shows a 1-hour
+  activity count and the most recently heard station; short press switches to
+  a "Recent Stations" list (last 3 heard).
+- **Alerts:** synthesizes across the other screens' data. Currently checks
+  wind gust and rain-rate thresholds against both weather stations, and
+  whether N4MI-13 (the operator's home Tempest station, relayed via a
+  separate project) has gone quiet for too long. Worst active alert is
+  headlined; a calm "ALL CLEAR" state when nothing's active.
+- **Config:** real Wi-Fi status/IP, and LIVE/Waiting status with freshness
+  age for both backends, plus N4MI-13's own liveness. Reached via long press
+  from any screen.
+- **Navigation:** rotate to cycle Overview → Mobile → Weather → Alerts → back
+  to Overview. Long press opens Config from any screen, remembering where you
+  came from. 10-second idle timeout returns to Overview. Both backends fetch
+  continuously in the background regardless of which screen is visible.
+
+Wi-Fi currently uses hardcoded credentials — porting Propagation Monitor's
+real captive-portal setup flow is deliberately deferred to its own dedicated
+future session.
 
 ## Repo layout
 
@@ -60,7 +68,7 @@ n4mi-aprs-monitor/
 │   │   ├── data_client.h        <- Weather
 │   │   └── mobile_client.h      <- Mobile Activity
 │   └── src/
-│       ├── main.cpp             <- screen state machine, all rendering
+│       ├── main.cpp             <- screen state machine, all rendering, Alerts logic
 │       ├── display_driver.cpp
 │       ├── encoder.cpp
 │       ├── wifi_client.cpp
