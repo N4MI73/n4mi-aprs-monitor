@@ -126,3 +126,10 @@
 #define GUST_WARNING_MPH    40.0f
 #define RAIN_CAUTION_IN_HR  0.25f
 #define RAIN_WARNING_IN_HR  0.50f
+
+// N4MI-13 silence alert -- beacon interval confirmed at 10 minutes, so
+// CAUTION allows for one missed beacon (APRS is inherently a bit
+// lossy), WARNING means several in a row have been missed, a real
+// pattern rather than noise.
+#define N4MI13_SILENCE_CAUTION_MIN  30
+#define N4MI13_SILENCE_WARNING_MIN  60

@@ -257,19 +257,27 @@ static void render_weather_screen() {
 }
 
 // ---------------------------------------------------------------------
-// Alerts -- evaluates weather thresholds against both stations. Reuses
-// PropMon's exact severity tiers rather than inventing new ones.
-// Structured so a future source (e.g. KC4GS-13's early-warning checks,
-// planned next session) slots in as one more candidate here, not a
-// restructuring.
+// Alerts -- evaluates all known alert sources against thresholds.
+// Reuses PropMon's exact severity tiers rather than inventing new
+// ones. Structured so future sources (e.g. KC4GS-13's early-warning
+// checks, still pending) slot in as one more candidate here, not a
+// restructuring -- already proven once by adding the N4MI-13 silence
+// check below without touching the weather-threshold logic.
 // ---------------------------------------------------------------------
 
 enum class AlertLevel { NONE, CAUTION, WARNING, CRITICAL };
+enum class AlertCategory { WEATHER, SYSTEM };
 
-struct WeatherAlert {
+// Max candidates any single find_worst_alert() call can hold. Bump
+// this if a future source could add more than one candidate at once
+// (weather currently contributes up to 4: gust+rain x2 stations).
+#define ALERT_MAX_CANDIDATES 5
+
+struct Alert {
     AlertLevel level = AlertLevel::NONE;
+    AlertCategory category = AlertCategory::WEATHER;
     char message[24] = "";
-    char station_line[28] = "";
+    char detail_line[28] = "";
 };
 
 static AlertLevel gust_level(float mph) {
@@ -284,34 +292,59 @@ static AlertLevel rain_level(float in_hr) {
     return AlertLevel::NONE;
 }
 
-static void add_candidate_if_alert(AlertLevel level, const char *msg_fmt, float value,
-                                     const WeatherStation &station,
-                                     WeatherAlert *candidates, int &n) {
-    if (level == AlertLevel::NONE || n >= 4) return;
-    WeatherAlert &c = candidates[n++];
+// -1 (never heard yet) deliberately does NOT alert -- that's "no
+// baseline established," not "gone silent," same distinction this
+// project draws everywhere else between waiting-for-first-data and an
+// actual problem.
+static AlertLevel silence_level(int minutes_since_heard) {
+    if (minutes_since_heard < 0) return AlertLevel::NONE;
+    if (minutes_since_heard >= N4MI13_SILENCE_WARNING_MIN) return AlertLevel::WARNING;
+    if (minutes_since_heard >= N4MI13_SILENCE_CAUTION_MIN) return AlertLevel::CAUTION;
+    return AlertLevel::NONE;
+}
+
+static void add_weather_candidate_if_alert(AlertLevel level, const char *msg_fmt, float value,
+                                             const WeatherStation &station,
+                                             Alert *candidates, int &n) {
+    if (level == AlertLevel::NONE || n >= ALERT_MAX_CANDIDATES) return;
+    Alert &c = candidates[n++];
     c.level = level;
+    c.category = AlertCategory::WEATHER;
     snprintf(c.message, sizeof(c.message), msg_fmt, value);
-    snprintf(c.station_line, sizeof(c.station_line), "%s - %.1f mi %s",
+    snprintf(c.detail_line, sizeof(c.detail_line), "%s - %.1f mi %s",
               station.callsign, station.distance_mi, station.bearing);
 }
 
-// Finds the single worst active weather alert and how many total are
-// active. `out` is untouched (stays AlertLevel::NONE) if nothing is
-// active -- callers should check total_count, not just out.level,
-// since a zero-count call leaves out in its default state either way.
-static void find_worst_weather_alert(WeatherAlert &out, int &total_count) {
-    WeatherAlert candidates[4];
+// Finds the single worst active alert across all sources and how many
+// total are active. `out` is untouched (stays AlertLevel::NONE) if
+// nothing is active -- callers should check total_count, not just
+// out.level, since a zero-count call leaves out in its default state
+// either way.
+static void find_worst_alert(Alert &out, int &total_count) {
+    Alert candidates[ALERT_MAX_CANDIDATES];
     int n = 0;
 
     if (have_weather_data) {
         const WeatherStation &p = current_weather.primary;
-        add_candidate_if_alert(gust_level(p.wind_gust_mph), "Gust %.0f mph", p.wind_gust_mph, p, candidates, n);
-        add_candidate_if_alert(rain_level(p.rain_1h_in), "Rain %.2f in/hr", p.rain_1h_in, p, candidates, n);
+        add_weather_candidate_if_alert(gust_level(p.wind_gust_mph), "Gust %.0f mph", p.wind_gust_mph, p, candidates, n);
+        add_weather_candidate_if_alert(rain_level(p.rain_1h_in), "Rain %.2f in/hr", p.rain_1h_in, p, candidates, n);
 
         if (current_weather.secondary.valid) {
             const WeatherStation &s = current_weather.secondary;
-            add_candidate_if_alert(gust_level(s.wind_gust_mph), "Gust %.0f mph", s.wind_gust_mph, s, candidates, n);
-            add_candidate_if_alert(rain_level(s.rain_1h_in), "Rain %.2f in/hr", s.rain_1h_in, s, candidates, n);
+            add_weather_candidate_if_alert(gust_level(s.wind_gust_mph), "Gust %.0f mph", s.wind_gust_mph, s, candidates, n);
+            add_weather_candidate_if_alert(rain_level(s.rain_1h_in), "Rain %.2f in/hr", s.rain_1h_in, s, candidates, n);
+        }
+    }
+
+    if (have_mobile_data && n < ALERT_MAX_CANDIDATES) {
+        AlertLevel lvl = silence_level(current_mobile.home_station_minutes_ago);
+        if (lvl != AlertLevel::NONE) {
+            Alert &c = candidates[n++];
+            c.level = lvl;
+            c.category = AlertCategory::SYSTEM;
+            snprintf(c.message, sizeof(c.message), "N4MI-13 silent");
+            snprintf(c.detail_line, sizeof(c.detail_line), "%dm since last heard",
+                      current_mobile.home_station_minutes_ago);
         }
     }
 
@@ -329,9 +362,9 @@ static void render_alerts_screen() {
     draw_centered_text("ALERTS", 195, 34, 3, COLOR_TEAL, true);
     gfx->drawLine(60, 64, 330, 64, COLOR_LABEL);
 
-    WeatherAlert worst;
+    Alert worst;
     int count = 0;
-    find_worst_weather_alert(worst, count);
+    find_worst_alert(worst, count);
 
     if (count == 0) {
         // Legitimate calm state -- same "quiet is okay" principle used
@@ -343,11 +376,13 @@ static void render_alerts_screen() {
         const char *level_word =
             (worst.level == AlertLevel::CAUTION)  ? "CAUTION" :
             (worst.level == AlertLevel::WARNING)  ? "WARNING" : "CRITICAL";
+        const char *category_label =
+            (worst.category == AlertCategory::WEATHER) ? "WEATHER" : "SYSTEM";
 
-        draw_centered_text("WEATHER", 195, 108, 2, COLOR_LABEL);
+        draw_centered_text(category_label, 195, 108, 2, COLOR_LABEL);
         draw_centered_text(level_word, 195, 138, 3, level_color, true);
         draw_centered_text(worst.message, 195, 170, 2, COLOR_MUTED);
-        draw_centered_text(worst.station_line, 195, 192, 2, COLOR_LABEL);
+        draw_centered_text(worst.detail_line, 195, 192, 2, COLOR_LABEL);
 
         if (count > 1) {
             char more_line[20];
