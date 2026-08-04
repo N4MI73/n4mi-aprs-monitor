@@ -138,3 +138,8 @@
 // pattern rather than noise.
 #define N4MI13_SILENCE_CAUTION_MIN  30
 #define N4MI13_SILENCE_WARNING_MIN  60
+
+// Ambient alert banner -- how long the full-width overlay shows after
+// a new/worsened alert, matching PropMon's own proven value for this
+// exact feature.
+#define ALERT_BANNER_DURATION_MS  9000UL

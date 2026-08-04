@@ -109,6 +109,7 @@ static uint16_t COLOR_STALE;
 static uint16_t COLOR_FOOTER;
 static uint16_t COLOR_RAIN;
 static uint16_t COLOR_RED;
+static uint16_t COLOR_BLACK;
 
 static void init_colors() {
     COLOR_TEAL   = gfx->color565(0x5D, 0xCA, 0xA5);
@@ -122,6 +123,7 @@ static void init_colors() {
     COLOR_FOOTER = gfx->color565(0x5F, 0x5E, 0x5A);
     COLOR_RAIN   = gfx->color565(0x37, 0x8A, 0xDD);
     COLOR_RED    = gfx->color565(0xE2, 0x4B, 0x4A);
+    COLOR_BLACK  = gfx->color565(0x00, 0x00, 0x00);
 }
 
 // ---------------------------------------------------------------------
@@ -407,6 +409,105 @@ static void find_worst_alert(Alert &out, int &total_count) {
             out = candidates[i];
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// Ambient alert banner/badge. Calls find_worst_alert() directly -- a
+// real advantage over PropMon's own history here, where the ambient
+// system ended up with its own independent copy of "find the worst
+// alert" logic, never fully reconciled with what the Alerts screen
+// itself computed. Nothing to duplicate or drift here.
+//
+// Badge: small persistent dot, visible on every screen while any
+// alert is active. Position carries category (left=WEATHER,
+// right=SYSTEM); color carries severity. Positioned in the very top
+// sliver of the display (y=14), above where any screen's own title
+// starts, so it can't collide with per-screen content.
+//
+// Banner: full-width band across the vertical center, ~9s, fires only
+// on a genuine change in the worst-alert signature (a new alert, an
+// escalation, or the headline changing because a worse alert cleared
+// and revealed a lesser one) -- confirmed with Dan: announces problems
+// appearing/worsening only, not alerts clearing. Deliberately does NOT
+// re-trigger on any gesture (unlike PropMon's own force-refresh
+// re-trigger) -- APRSMon's short press already means something
+// different per screen, so there's no clean equivalent to reuse.
+// ---------------------------------------------------------------------
+
+static AlertCategory last_announced_category = AlertCategory::WEATHER; // arbitrary init, only matters once level != NONE
+static AlertLevel last_announced_level = AlertLevel::NONE;             // NONE = nothing announced yet / all clear
+static bool banner_active = false;
+static unsigned long banner_started_millis = 0;
+
+// Checked once per loop pass, independent of any encoder event --
+// alert state can change purely from a background fetch completing,
+// with no user interaction at all.
+static void check_for_new_alert(unsigned long now, bool &needs_render) {
+    Alert worst;
+    int count = 0;
+    find_worst_alert(worst, count);
+
+    if (count == 0) {
+        // Legitimately all clear -- reset tracking so a future alert,
+        // even one with the same category/level as before, gets
+        // freshly announced rather than being suppressed as "already
+        // seen."
+        last_announced_level = AlertLevel::NONE;
+        return;
+    }
+
+    if (worst.category != last_announced_category || worst.level != last_announced_level) {
+        last_announced_category = worst.category;
+        last_announced_level = worst.level;
+        banner_active = true;
+        banner_started_millis = now;
+        needs_render = true;
+    }
+}
+
+// Called at the end of render_current_screen(), after the specific
+// screen's own content -- draws on top of whatever was just rendered.
+static void draw_ambient_alert_overlay() {
+    Alert worst;
+    int count = 0;
+    find_worst_alert(worst, count);
+
+    if (count > 0) {
+        int badge_x = (worst.category == AlertCategory::WEATHER) ? 150 : 240;
+        uint16_t badge_color = (worst.level == AlertLevel::CAUTION) ? COLOR_STALE : COLOR_RED;
+        gfx->fillCircle(badge_x, 14, 6, badge_color);
+    }
+
+    if (!banner_active) return;
+
+    if (count == 0) {
+        // Alert cleared while the banner was still showing -- stop
+        // early rather than displaying a banner for a problem that no
+        // longer exists.
+        banner_active = false;
+        return;
+    }
+
+    if (millis() - banner_started_millis >= ALERT_BANNER_DURATION_MS) {
+        banner_active = false;
+        return;
+    }
+
+    // Always render whatever is CURRENTLY worst, not a stale snapshot
+    // from the moment the banner first triggered -- if it escalated
+    // further during its own display window, the banner should reflect
+    // that.
+    uint16_t band_color = (worst.level == AlertLevel::CAUTION) ? COLOR_STALE : COLOR_RED;
+    gfx->fillRect(20, 165, 350, 60, band_color);
+
+    const char *cat_word = (worst.category == AlertCategory::WEATHER) ? "WEATHER" : "SYSTEM";
+    const char *level_word =
+        (worst.level == AlertLevel::CAUTION)  ? "CAUTION" :
+        (worst.level == AlertLevel::WARNING)  ? "WARNING" : "CRITICAL";
+    char headline[24];
+    snprintf(headline, sizeof(headline), "%s %s", cat_word, level_word);
+    draw_centered_text(headline, 195, 174, 3, COLOR_BLACK, true);
+    draw_centered_text(worst.message, 195, 206, 2, COLOR_BLACK);
 }
 
 static void render_alerts_screen() {
@@ -724,6 +825,7 @@ static void render_current_screen() {
         case Screen::CONFIG:   render_config_screen();   break;
         case Screen::SETUP:    render_setup_screen();    break;
     }
+    draw_ambient_alert_overlay();
 }
 
 // ---------------------------------------------------------------------
@@ -777,6 +879,11 @@ void loop() {
     // At most one render per loop pass -- coalescing redraws, same
     // lesson PropMon learned the hard way (its own Phase 2 lag bug #1).
     bool needs_render = false;
+
+    // Ambient alert banner -- checked every pass, since alert state can
+    // change purely from a background fetch completing, with no user
+    // interaction at all.
+    check_for_new_alert(now, needs_render);
 
     EncoderEvent evt = encoder_poll();
 

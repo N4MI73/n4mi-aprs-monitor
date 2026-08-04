@@ -23,10 +23,10 @@ in the same repo.
 
 ---
 
-## Status
+## Status: v1.0
 
-**All five screens are built and confirmed working on real hardware, including a
-real Wi-Fi captive portal setup flow.**
+**All five screens are built and confirmed working on real hardware**, including
+a real Wi-Fi captive portal setup flow and an ambient alert banner/badge system.
 
 <table>
 <tr>
@@ -67,7 +67,10 @@ real Wi-Fi captive portal setup flow.**
   wind gust and rain-rate thresholds against both weather stations, and
   whether N4MI-13 (the operator's home Tempest station, relayed via a
   separate project) has gone quiet for too long. Worst active alert is
-  headlined; a calm "ALL CLEAR" state when nothing's active.
+  headlined; a calm "ALL CLEAR" state when nothing's active. A small
+  persistent badge and a temporary full-width banner surface a new or
+  worsening alert on whatever screen is currently showing, so you don't have
+  to be looking at the Alerts screen to notice.
 - **Config:** real Wi-Fi status/IP, and LIVE/Waiting status with freshness
   age for both backends, plus N4MI-13's own liveness. Reached via long press
   from any screen.
@@ -85,6 +88,10 @@ transparently migrates a hardcoded fallback into that storage. The portal
 keeps running in the background even while rotating away to check other
 screens, and cancels cleanly with a long press from the Setup screen itself.
 
+*Note: the ambient banner/badge system is built and deployed but hasn't yet
+been seen triggering against a genuine alert condition on real hardware —
+worth keeping in mind until that's actually confirmed.*
+
 ## Repo layout
 
 ```
@@ -101,7 +108,7 @@ n4mi-aprs-monitor/
 │   │   ├── data_client.h        <- Weather
 │   │   └── mobile_client.h      <- Mobile Activity
 │   └── src/
-│       ├── main.cpp             <- screen state machine, all rendering, Alerts logic
+│       ├── main.cpp             <- screen state machine, all rendering, Alerts + ambient banner/badge logic
 │       ├── display_driver.cpp
 │       ├── encoder.cpp
 │       ├── wifi_client.cpp
@@ -131,6 +138,18 @@ round AMOLED (`Arduino_CO5300` driver), rotary encoder with push button.
 - **Mobile Activity data:** [APRS-IS](https://www.aprs-is.net), the amateur
   radio community's own volunteer-run network, via a direct, receive-only
   connection filtered to a 20-mile radius around the operator's home location.
+
+## Roadmap
+
+Post-v1.0, not yet scoped or started:
+
+- A western sentinel weather station (early-warning pressure/wind checks
+  added to Alerts, since Georgia weather typically approaches from the
+  west) — the primary/secondary stations already cover the east side.
+- A blog post on [n4mi.tech](https://n4mi.tech) walking through this
+  project.
+- Longer-term: north and south sentinel stations, for full directional
+  coverage around the primary/secondary pair.
 
 ## License
 
