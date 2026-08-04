@@ -24,6 +24,7 @@
 #include "wifi_client.h"
 #include "data_client.h"
 #include "mobile_client.h"
+#include "wifi_portal.h"
 #include "encoder.h"
 
 // Set to 1 for verbose Serial diagnostic output, 0 for production.
@@ -61,6 +62,17 @@ static uint32_t last_hold_bar_width = 0;
 // before this whole hold began" regardless of which of the two it's
 // returning from.
 static Screen screen_before_config = Screen::OVERVIEW;
+
+// Wi-Fi setup Stage 2 state. portal_started_ms only gets set on the
+// actual first start of a session (not every RESET_HOLD re-visit while
+// already active) -- the abandon timeout measures from when setup
+// genuinely began, not from the most recent check-in.
+static unsigned long portal_started_ms = 0;
+// 0 = success not yet detected. Tracks when wifi_portal_is_complete()
+// first became true, so the grace period (letting the phone's browser
+// receive the confirmation page) is measured correctly even though
+// this is checked every loop pass, not just once.
+static unsigned long portal_success_detected_ms = 0;
 
 // Rotation order confirmed this session: Overview -> Mobile -> Weather
 // -> back to Overview. next_screen()/prev_screen() define that LOGICAL
@@ -647,27 +659,60 @@ static void render_config_screen() {
     draw_centered_text("Long press to return", 195, 330, 2, COLOR_FOOTER);
 }
 
-// Wi-Fi setup Stage 1 -- honest placeholder, matching PropMon's own
-// precedent for this exact screen. No real portal exists yet; that's
-// Stage 2. Reached by continuing a long press past the point Config
-// normally triggers (the RESET_HOLD event).
+// Wi-Fi setup Stage 2 -- real content, mockup-approved before code.
+// Reached by continuing a long press past the point Config normally
+// triggers (RESET_HOLD). CONNECTING is unlikely to actually be seen
+// rendered live -- validating a submitted password is a genuinely
+// blocking call (see wifi_portal.h), so the whole device is frozen
+// during that specific window and the screen simply won't update
+// again until it resolves to CONNECTED or FAILED.
 static void render_setup_screen() {
     display_clear();
 
     draw_centered_text("SETUP", 195, 34, 3, COLOR_TEAL, true);
     gfx->drawLine(60, 60, 330, 60, COLOR_LABEL);
 
-    draw_centered_text("Wi-Fi setup portal", 195, 130, 2, COLOR_MUTED);
-    draw_centered_text("not yet built", 195, 154, 2, COLOR_MUTED);
+    WifiPortalStatus status = wifi_portal_get_status();
 
-    gfx->drawLine(60, 200, 330, 200, COLOR_LABEL);
+    switch (status) {
+        case WifiPortalStatus::SCANNING:
+            draw_centered_text("SCANNING...", 195, 140, 3, COLOR_TEAL, true);
+            break;
 
-    draw_centered_text("Currently using", 195, 230, 2, COLOR_LABEL);
-    draw_centered_text("stored or hardcoded", 195, 254, 2, COLOR_LABEL);
-    draw_centered_text("credentials", 195, 278, 2, COLOR_LABEL);
+        case WifiPortalStatus::CONNECTING:
+            draw_centered_text("CONNECTING...", 195, 140, 3, COLOR_STALE, true);
+            break;
 
-    draw_centered_text("Rotate or long press", 195, 316, 2, COLOR_FOOTER);
-    draw_centered_text("to return", 195, 338, 2, COLOR_FOOTER);
+        case WifiPortalStatus::CONNECTED:
+            draw_centered_text("CONNECTED!", 195, 140, 3, COLOR_TEAL, true);
+            break;
+
+        case WifiPortalStatus::WAITING:
+        case WifiPortalStatus::FAILED: {
+            bool failed = (status == WifiPortalStatus::FAILED);
+            draw_centered_text(failed ? "FAILED" : "READY", 195, 108, 3,
+                                 failed ? COLOR_RED : COLOR_TEAL, true);
+
+            draw_centered_text("Join Wi-Fi network", 195, 140, 2, COLOR_LABEL);
+            draw_centered_text(WIFI_SETUP_AP_NAME, 195, 164, 2, RGB565_WHITE, true);
+
+            gfx->drawLine(60, 192, 330, 192, COLOR_LABEL);
+
+            char line[24];
+            snprintf(line, sizeof(line), "%d networks found", wifi_portal_network_count());
+            draw_centered_text(line, 195, 218, 2, COLOR_LABEL);
+
+            uint8_t clients = wifi_portal_client_count();
+            snprintf(line, sizeof(line), "%d device%s connected", clients, clients == 1 ? "" : "s");
+            draw_centered_text(line, 195, 242, 2, COLOR_LABEL);
+            break;
+        }
+    }
+
+    if (status != WifiPortalStatus::CONNECTED) {
+        draw_centered_text("Rotate to peek", 195, 316, 2, COLOR_FOOTER);
+        draw_centered_text("Hold to cancel", 195, 338, 2, COLOR_FOOTER);
+    }
 }
 
 static void render_current_screen() {
@@ -723,6 +768,12 @@ void loop() {
     maybe_fetch_weather(now);
     maybe_fetch_mobile(now);
 
+    // Services the setup portal's DNS/web server when active; a
+    // cheap no-op otherwise. Runs regardless of which screen is
+    // currently showing, since the portal keeps working in the
+    // background even while rotated away to peek at another screen.
+    wifi_portal_process();
+
     // At most one render per loop pass -- coalescing redraws, same
     // lesson PropMon learned the hard way (its own Phase 2 lag bug #1).
     bool needs_render = false;
@@ -768,8 +819,18 @@ void loop() {
 
     switch (evt) {
         case EncoderEvent::ROTATE_CW:
-            if (current_screen == Screen::CONFIG || current_screen == Screen::SETUP) {
+            if (current_screen == Screen::CONFIG) {
                 current_screen = screen_before_config;
+            } else if (current_screen == Screen::SETUP) {
+                // While the portal is actively running, rotation peeks
+                // at other screens rather than exiting Setup entirely --
+                // the portal keeps working in the background regardless.
+                // Falls back to the old Stage-1 exit behavior in the
+                // (shouldn't-normally-happen) case Setup is showing
+                // without an active portal.
+                current_screen = wifi_portal_is_active()
+                    ? prev_screen(screen_before_config)
+                    : screen_before_config;
             } else {
                 current_screen = prev_screen(current_screen);
             }
@@ -777,8 +838,12 @@ void loop() {
             break;
 
         case EncoderEvent::ROTATE_CCW:
-            if (current_screen == Screen::CONFIG || current_screen == Screen::SETUP) {
+            if (current_screen == Screen::CONFIG) {
                 current_screen = screen_before_config;
+            } else if (current_screen == Screen::SETUP) {
+                current_screen = wifi_portal_is_active()
+                    ? next_screen(screen_before_config)
+                    : screen_before_config;
             } else {
                 current_screen = next_screen(current_screen);
             }
@@ -796,7 +861,19 @@ void loop() {
             break;
 
         case EncoderEvent::LONG_PRESS:
-            if (current_screen == Screen::CONFIG || current_screen == Screen::SETUP) {
+            if (current_screen == Screen::SETUP) {
+                // Long press while actually VIEWING Setup cancels the
+                // portal -- different from Config, where long press is
+                // just navigation with no side effect. (A long press
+                // that happened to land on some OTHER screen while the
+                // portal ran in the background doesn't reach this case
+                // at all -- it falls into the "else" branch below and
+                // opens Config as normal, leaving the portal running.)
+                if (wifi_portal_is_active()) {
+                    wifi_portal_stop();
+                }
+                current_screen = screen_before_config;
+            } else if (current_screen == Screen::CONFIG) {
                 current_screen = screen_before_config;
             } else {
                 screen_before_config = current_screen;
@@ -805,7 +882,7 @@ void loop() {
             needs_render = true;
             break;
 
-        case EncoderEvent::RESET_HOLD:
+        case EncoderEvent::RESET_HOLD: {
             // "Hold longer to go further" -- overrides whatever
             // LONG_PRESS just did for this same physical hold (which
             // already tentatively entered Config, capturing
@@ -813,17 +890,63 @@ void loop() {
             // before doing so). Reuse that same captured value as
             // where Setup should return to -- no separate tracking
             // variable needed.
+            bool was_active = wifi_portal_is_active();
             current_screen = Screen::SETUP;
+            wifi_portal_start(); // safe no-op if already active -- lets
+                                  // a fresh RESET_HOLD from elsewhere
+                                  // bring you back to check on it
+            if (!was_active) {
+                portal_started_ms = now;
+            }
             needs_render = true;
             break;
+        }
 
         default:
             break;
     }
 
+    // Setup portal housekeeping -- checked every loop pass regardless
+    // of encoder activity, since both of these are time-based, not
+    // event-based.
+    if (wifi_portal_is_active() &&
+        (now - portal_started_ms) >= WIFI_SETUP_ABANDON_TIMEOUT_MS) {
+        // Nobody finished in time -- give up gracefully rather than
+        // leaving the AP running indefinitely.
+        wifi_portal_stop();
+        if (current_screen == Screen::SETUP) {
+            current_screen = screen_before_config;
+        }
+        needs_render = true;
+    }
+
+    if (wifi_portal_is_complete()) {
+        if (portal_success_detected_ms == 0) {
+            portal_success_detected_ms = now;
+        } else if (now - portal_success_detected_ms >= WIFI_SETUP_SUCCESS_GRACE_MS) {
+            // Grace period elapsed -- the phone's browser has had time
+            // to receive the confirmation page. Tear the portal down
+            // and force an immediate fetch on both backends rather than
+            // waiting for their normal 10-min/1-min cycle, so the
+            // instrument actually "starts showing live data shortly"
+            // like the success page promises.
+            wifi_portal_stop();
+            portal_success_detected_ms = 0;
+            last_weather_fetch_millis = 0;
+            last_mobile_fetch_millis = 0;
+            current_screen = Screen::OVERVIEW;
+            needs_render = true;
+        }
+    } else {
+        portal_success_detected_ms = 0;
+    }
+
     // Idle timeout: return to Overview from anywhere, matching
-    // PropMon's own established behavior.
+    // PropMon's own established behavior. Suppressed while the setup
+    // portal is active -- filling out the form on a phone can easily
+    // take longer than the normal 10s window.
     if (current_screen != Screen::OVERVIEW &&
+        !wifi_portal_is_active() &&
         now - last_interaction_millis >= IDLE_TIMEOUT_MS) {
         current_screen = Screen::OVERVIEW;
         needs_render = true;

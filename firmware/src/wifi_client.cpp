@@ -4,6 +4,10 @@
 // Wi-Fi setup Stage 1 -- see wifi_client.h for the full picture. NVS
 // storage logic ported directly from Propagation Monitor's own real
 // build of this exact feature, not reconstructed from scratch.
+//
+// Wi-Fi setup Stage 2: added wifi_client_try_credentials() for the
+// real setup portal's validation flow -- see wifi_client.h for why it
+// deliberately disconnects first.
 
 #include "wifi_client.h"
 #include "wifi_credentials.h"
@@ -59,6 +63,25 @@ static bool connect_with_credentials(const char *ssid, const char *password) {
     }
 #endif
     return connected;
+}
+
+// Deliberately does NOT benefit from connect_with_credentials()'s
+// "already connected, short-circuit true" check the way this
+// function's other callers do. The whole point here is testing
+// whether *these specific* credentials work -- but if the device was
+// already connected (e.g. it boots using stored credentials, and
+// setup mode doesn't drop that existing connection when it starts the
+// AP alongside it), that check would report success immediately
+// without ever attempting WiFi.begin() with what was actually
+// submitted. PropMon confirmed this exact scenario on real hardware: a
+// wrong password was accepted as "Connected!" because the device was
+// still connected to its original network from before setup mode
+// began. Explicitly disconnecting first forces a real, clean attempt
+// against the submitted credentials every time.
+bool wifi_client_try_credentials(const char *ssid, const char *password) {
+    WiFi.disconnect();
+    delay(100); // brief settle time between disconnect and the new attempt
+    return connect_with_credentials(ssid, password);
 }
 
 bool wifi_client_has_stored_credentials() {

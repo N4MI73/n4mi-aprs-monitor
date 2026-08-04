@@ -62,6 +62,11 @@
 // ---------------------------------------------------------------------
 #define WIFI_CONNECT_TIMEOUT_MS   15000
 
+// Wi-Fi setup Stage 2 -- real captive portal.
+#define WIFI_SETUP_AP_NAME           "N4MI-APRSMon-Setup"
+#define WIFI_SETUP_SUCCESS_GRACE_MS  3000UL    // time for the phone's browser to receive the confirmation page before the AP drops
+#define WIFI_SETUP_ABANDON_TIMEOUT_MS (5UL * 60UL * 1000UL) // give up if nobody finishes
+
 // Required by the reused encoder.cpp (identical hardware to PropMon) --
 // fires RESET_HOLD if the same physical hold continues past this point,
 // after LONG_PRESS already fired at LONG_PRESS_MS. PropMon uses this to
